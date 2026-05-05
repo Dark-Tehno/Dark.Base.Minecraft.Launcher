@@ -1,6 +1,7 @@
 nuitka-crash-report.xml
 installer.iss
 build.bat
+release
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

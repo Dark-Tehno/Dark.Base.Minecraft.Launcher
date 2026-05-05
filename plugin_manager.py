@@ -2,7 +2,8 @@ import os
 import importlib.util
 import sys
 import inspect
-from PyQt6.QtWidgets import QPushButton
+from PyQt6.QtWidgets import QPushButton, QWidget, QTabWidget
+from plugin_config import PluginConfig
 from api import DBMLPlugin, PluginUIHelper
 from plugin_helpers import PluginUIHelper
 
@@ -19,10 +20,14 @@ class PluginManager:
     
     def initialize_plugins(self):
         """Выполняет все действия по инициализации плагинов после создания UI."""
+        # 0. Передаем плагинам ссылки на виджеты, которые они запросили
+        self._provide_widget_references()
         # 1. Позволяем плагинам добавить свои виджеты
         self.modify_all_ui()
         # 2. Применяем перехваты действий
         self._apply_action_overrides()
+        # 3. Добавляем страницы настроек от плагинов
+        self.create_settings_pages()
 
     def load_plugins(self):
         """
@@ -54,7 +59,9 @@ class PluginManager:
                     for name, obj in inspect.getmembers(module, inspect.isclass):
                         if issubclass(obj, DBMLPlugin) and obj is not DBMLPlugin:
                             # Нашли класс плагина, создаем его экземпляр
-                            plugin_instance = obj(self.main_window, self, self.ui_helper)
+                            # Создаем для него персональный менеджер конфигурации
+                            config_manager = PluginConfig(obj.__name__)
+                            plugin_instance = obj(self.main_window, self, self.ui_helper, config_manager)
                             self.plugins.append(plugin_instance)
                             print(f"  - Плагин '{plugin_instance.name}' успешно загружен.")
                 except Exception as e:
@@ -69,10 +76,44 @@ class PluginManager:
                 all_styles.append(styles)
         return "\n".join(all_styles)
 
+    def get_window_title(self) -> str | None:
+        """
+        Получает заголовок окна от последнего плагина, который его определяет.
+        """
+        title = None
+        for plugin in self.plugins:
+            plugin_title = plugin.get_window_title()
+            if plugin_title:
+                title = plugin_title
+        return title
+    
+    def get_window_icon(self) -> str | None:
+        """
+        Получает иконку окна от последнего плагина, который ее определяет.
+        """
+        icon_path = None
+        for plugin in self.plugins:
+            plugin_icon_path = plugin.get_window_icon()
+            if plugin_icon_path:
+                icon_path = plugin_icon_path
+        return icon_path
+        
+
     def modify_all_ui(self):
         """Вызывает хук modify_ui для всех плагинов."""
         for plugin in self.plugins:
             plugin.modify_ui()
+
+    def create_settings_pages(self):
+        """Вызывает хук create_settings_page для всех плагинов и добавляет их вкладки."""
+        for plugin in self.plugins:
+            result = plugin.create_settings_page()
+            if result:
+                title, widget = result
+                # Убедимся, что у нас есть вкладки настроек
+                if title and widget and isinstance(self.main_window.settings_tabs, QTabWidget):
+                    self.main_window.settings_tabs.addTab(widget, title)
+                    print(f"INFO: Плагин '{plugin.name}' добавил страницу настроек '{title}'.")
 
     def run_pre_launch_hooks(self, launch_options: dict) -> dict:
         """Прогоняет опции запуска через все плагины."""
@@ -80,6 +121,39 @@ class PluginManager:
         for plugin in self.plugins:
             options = plugin.on_pre_launch(options)
         return options
+
+    def run_shutdown_hooks(self):
+        """Вызывает хук on_shutdown для всех плагинов."""
+        print("Выполнение хуков завершения работы плагинов...")
+        for plugin in self.plugins:
+            plugin.on_shutdown()
+
+    def run_profile_changed_hooks(self, profile_name: str):
+        """Вызывает хук on_profile_changed для всех плагинов."""
+        for plugin in self.plugins:
+            plugin.on_profile_changed(profile_name)
+
+    def _provide_widget_references(self):
+        """
+        Находит виджеты, запрошенные плагинами, и передает им ссылки.
+        """
+        # Собираем все запросы от всех плагинов, чтобы не искать виджеты по несколько раз
+        all_requests = set()
+        for plugin in self.plugins:
+            requests = plugin.get_widget_references()
+            if requests:
+                all_requests.update(requests)
+
+        # Находим все запрошенные виджеты
+        found_widgets = {name: self.main_window.findChild(QWidget, name) for name in all_requests}
+
+        # Передаем найденные виджеты в каждый плагин, который их запрашивал
+        for plugin in self.plugins:
+            requests = plugin.get_widget_references()
+            if requests:
+                for name in requests:
+                    if found_widgets.get(name):
+                        plugin.widgets[name] = found_widgets[name]
 
     def _apply_action_overrides(self):
         """
@@ -99,7 +173,11 @@ class PluginManager:
                 original_action = self.main_window.original_actions.get(button_name)
 
                 if button and original_action:
-                    button.clicked.disconnect()
+                    try:
+                        button.clicked.disconnect()
+                    except TypeError:
+                        # Сигнал мог быть уже отключен, это не ошибка
+                        pass
                     # Используем lambda, чтобы передать original_action в новый обработчик
                     button.clicked.connect(lambda checked=False, oa=original_action, na=new_action: na(oa))
                     overridden_buttons.add(button_name)

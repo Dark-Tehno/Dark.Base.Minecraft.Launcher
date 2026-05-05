@@ -47,3 +47,12 @@ class PluginUIHelper:
         :param text: Текст сообщения.
         """
         QMessageBox.information(self.main_window, title, text)
+
+    def log_message(self, text: str):
+        """
+        Добавляет сообщение в основной лог на вкладке "Запуск".
+
+        :param text: Текст сообщения для лога.
+        """
+        if hasattr(self.main_window, 'log_output'):
+            self.main_window.log_output.append(text)

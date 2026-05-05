@@ -7,11 +7,12 @@ from PyQt6.QtWidgets import (QApplication, QCheckBox, QMainWindow, QTabWidget, Q
                              QHBoxLayout, QLineEdit, QPushButton, QComboBox,
                              QTextEdit, QLabel, QListWidget, QListWidgetItem,
                              QFileDialog, QDialog, QFormLayout, QSpinBox, QMessageBox, QDialogButtonBox)
-from PyQt6.QtCore import Qt
 import minecraft_launcher_lib
+from PyQt6.QtGui import QIcon
 
 # Импортируем менеджер плагинов
 from plugin_manager import PluginManager
+from PyQt6.QtCore import pyqtSignal
 
 # Импортируем наш класс для запуска игры
 from main import GameLauncher
@@ -152,6 +153,7 @@ class MainWindow(QMainWindow):
         super().__init__()
 
         self.setWindowTitle("Dark.Base.Minecraft.Launcher")
+        self.setWindowIcon(QIcon('./assets/icon.ico'))
         self.setGeometry(100, 100, 600, 550)
 
         # Загружаем настройки
@@ -164,6 +166,7 @@ class MainWindow(QMainWindow):
         # --- ВКЛАДКА "ЗАПУСК" ---
         self.launch_tab = QWidget()
         self.tabs.addTab(self.launch_tab, "Запуск")
+        self.launch_tab.setObjectName("launch_tab_widget") # Даем имя для API плагинов
         main_layout = QVBoxLayout(self.launch_tab)
 
         # --- Верхняя часть ---
@@ -184,6 +187,7 @@ class MainWindow(QMainWindow):
         profile_management_layout.addWidget(QLabel("Профиль (сборка):"))
         launch_settings_layout.setObjectName("launch_settings_layout") # Даем имя layout для поиска плагинами
         self.profiles_combo = QComboBox()
+        self.profiles_combo.setObjectName("profiles_combo")
         self.profiles_combo.currentTextChanged.connect(self.on_profile_selected)
         profile_management_layout.addWidget(self.profiles_combo)
 
@@ -210,6 +214,7 @@ class MainWindow(QMainWindow):
         # --- Правая колонка (управление файлами профиля) ---
         profile_files_layout = QVBoxLayout()
         self.profile_files_tabs = QTabWidget()
+        self.profile_files_tabs.setObjectName("profile_files_tabs")
         profile_files_layout.addWidget(self.profile_files_tabs)
 
         # -- ВКЛАДКА "МОДЫ" --
@@ -217,6 +222,7 @@ class MainWindow(QMainWindow):
         self.profile_files_tabs.addTab(mods_tab, "Моды")
         mods_tab_layout = QVBoxLayout(mods_tab)
         self.mods_list_widget = QListWidget()
+        self.mods_list_widget.setObjectName("mods_list_widget")
         mods_tab_layout.addWidget(self.mods_list_widget)
         mod_buttons_layout = QHBoxLayout()
         add_mod_button = QPushButton("Добавить")
@@ -234,6 +240,7 @@ class MainWindow(QMainWindow):
         self.profile_files_tabs.addTab(resourcepacks_tab, "Текстуры")
         resourcepacks_tab_layout = QVBoxLayout(resourcepacks_tab)
         self.resourcepacks_list_widget = QListWidget()
+        self.resourcepacks_list_widget.setObjectName("resourcepacks_list_widget")
         resourcepacks_tab_layout.addWidget(self.resourcepacks_list_widget)
         resourcepack_buttons_layout = QHBoxLayout()
         add_resourcepack_button = QPushButton("Добавить")
@@ -251,6 +258,7 @@ class MainWindow(QMainWindow):
         self.profile_files_tabs.addTab(shaderpacks_tab, "Шейдеры")
         shaderpacks_tab_layout = QVBoxLayout(shaderpacks_tab)
         self.shaderpacks_list_widget = QListWidget()
+        self.shaderpacks_list_widget.setObjectName("shaderpacks_list_widget")
         shaderpacks_tab_layout.addWidget(self.shaderpacks_list_widget)
         shaderpack_buttons_layout = QHBoxLayout()
         add_shaderpack_button = QPushButton("Добавить")
@@ -283,23 +291,30 @@ class MainWindow(QMainWindow):
         # Сохраняем оригинальные действия кнопок для API плагинов
         self.original_actions = {
             "play_button": self.start_game,
-            "analyze_profile_button": self.analyze_current_profile
+            "analyze_profile_button": self.analyze_current_profile,
+            "new_profile_button": self.create_new_profile,
+            "delete_profile_button": self.delete_profile,
+            "import_profile_button": self.import_profiles,
+            "add_mod_button": self.add_mod,
+            "remove_mod_button": self.remove_mod,
+            "add_resourcepack_button": self.add_resourcepack,
+            "remove_resourcepack_button": self.remove_resourcepack,
+            "add_shaderpack_button": self.add_shaderpack,
+            "remove_shaderpack_button": self.remove_shaderpack,
         }
 
-        # Загружаем список профилей при запуске
-        self.populate_profiles_list()
-
-        # --- Инициализация и применение плагинов (ПОСЛЕ создания всего UI) ---
-        self.plugin_manager = PluginManager(self)
-        self.plugin_manager.initialize_plugins()
-
         # --- ВКЛАДКА "НАСТРОЙКИ" ---
-        self.settings_tab = QWidget()
-        self.tabs.addTab(self.settings_tab, "Настройки")
-        settings_layout = QVBoxLayout(self.settings_tab)
+        # Теперь это QTabWidget для поддержки вкладок от плагинов
+        self.settings_tabs = QTabWidget()
+        self.tabs.addTab(self.settings_tabs, "Настройки")
+
+        # Создаем страницу для общих настроек
+        general_settings_page = QWidget()
+        self.settings_tabs.addTab(general_settings_page, "Общие")
+        settings_layout = QVBoxLayout(general_settings_page)
 
         version_settings_layout = QFormLayout()
-        
+
         self.show_snapshots_checkbox = QCheckBox()
         self.show_snapshots_checkbox.setChecked(self.settings.get('show_snapshots', False))
         self.show_snapshots_checkbox.stateChanged.connect(lambda: self.save_setting('show_snapshots', self.show_snapshots_checkbox.isChecked()))
@@ -312,6 +327,20 @@ class MainWindow(QMainWindow):
 
         settings_layout.addLayout(version_settings_layout)
         settings_layout.addStretch() # Добавляет пустое пространство, чтобы прижать настройки к верху
+
+        # Создаем менеджер плагинов
+        self.plugin_manager = PluginManager(self)
+
+        # Теперь, когда весь UI создан, инициализируем плагины, которые его модифицируют
+        self.plugin_manager.initialize_plugins()
+
+        # Загружаем список профилей при запуске (после инициализации плагинов)
+        self.populate_profiles_list()
+
+    def closeEvent(self, event):
+        """Перехватываем событие закрытия окна."""
+        self.plugin_manager.run_shutdown_hooks()
+        event.accept()
 
     def save_setting(self, key, value):
         """Сохраняет одну настройку и обновляет файл."""
@@ -470,6 +499,8 @@ class MainWindow(QMainWindow):
         self.populate_mods_list(profile_name)
         self.populate_resourcepacks_list(profile_name)
         self.populate_shaderpacks_list(profile_name)
+        # Уведомляем плагины о смене профиля
+        self.plugin_manager.run_profile_changed_hooks(profile_name)
 
     def create_new_profile(self, prefilled_name=""):
         """Открывает диалог для создания нового профиля."""
@@ -612,9 +643,19 @@ if __name__ == "__main__":
         
     app = QApplication(sys.argv)
     window = MainWindow()
+
     # Собираем стили из основного файла и всех плагинов
     final_styles = HACKER_STYLE + "\n" + window.plugin_manager.get_all_styles()
     app.setStyleSheet(final_styles)
+
+    # Применяем заголовок окна от плагина, если он есть
+    new_title = window.plugin_manager.get_window_title()
+    if new_title:
+        window.setWindowTitle(new_title)
+    # Применяем иконку окна от плагина, если она есть
+    new_icon_path = window.plugin_manager.get_window_icon()
+    if new_icon_path:
+        window.setWindowIcon(QIcon(new_icon_path))
 
     window.show()
     sys.exit(app.exec())
